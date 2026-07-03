@@ -3,96 +3,121 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
 
-type Appointment = {
-  id: string;
-  appointment_date: string;
-  start_time: string;
-  status: string;
-  patients: { full_name: string } | null;
-  users: { full_name: string } | null;
+const STATUS_LABELS: Record<string, { label: string; color: string }> = {
+  scheduled: { label: 'مجدول', color: 'bg-blue-100 text-blue-700' },
+  completed: { label: 'مكتمل', color: 'bg-green-100 text-green-700' },
+  cancelled: { label: 'ملغي', color: 'bg-red-100 text-red-700' },
+  no_show: { label: 'لم يحضر', color: 'bg-gray-100 text-gray-600' },
 };
 
 export default function AppointmentsPage() {
-  const [appointments, setAppointments] = useState<Appointment[]>([]);
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [appointments, setAppointments] = useState<any[]>([]);
+  const [filter, setFilter] = useState<'all' | 'today' | 'upcoming'>('today');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function load() {
       setLoading(true);
-      const { data } = await supabase
+      const today = new Date().toISOString().split('T')[0];
+      let query = supabase
         .from('appointments')
-        .select('id,appointment_date,start_time,status,patients(full_name),users(full_name)')
-        .eq('appointment_date', date)
-        .order('start_time');
-      setAppointments((data as any) || []);
+        .select('*, patients(id, full_name, phone), users(full_name, specialty)')
+        .order('scheduled_at', { ascending: true });
+
+      if (filter === 'today') {
+        query = query.gte('scheduled_at', today).lt('scheduled_at', today + 'T23:59:59');
+      } else if (filter === 'upcoming') {
+        query = query.gte('scheduled_at', new Date().toISOString());
+      }
+
+      const { data } = await query.limit(50);
+      setAppointments(data || []);
       setLoading(false);
     }
     load();
-  }, [date]);
+  }, [filter]);
 
-  const statusLabel: Record<string, string> = {
-    scheduled: 'مجدول',
-    confirmed: 'مؤكد',
-    completed: 'منتهي',
-    cancelled: 'ملغي',
-    no_show: 'لم يحضر',
-  };
-
-  const statusColor: Record<string, string> = {
-    scheduled: 'bg-blue-100 text-blue-700',
-    confirmed: 'bg-green-100 text-green-700',
-    completed: 'bg-gray-100 text-gray-600',
-    cancelled: 'bg-red-100 text-red-700',
-    no_show: 'bg-yellow-100 text-yellow-700',
-  };
+  async function updateStatus(id: string, status: string) {
+    await supabase.from('appointments').update({ status }).eq('id', id);
+    setAppointments((prev) => prev.map((a) => a.id === id ? { ...a, status } : a));
+  }
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-green-700">المواعيد</h1>
-        <Link href="/appointments/new" className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 text-sm">
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h1 className="text-2xl font-bold text-gray-800">المواعيد</h1>
+        <Link href="/appointments/new"
+          className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700">
           + موعد جديد
         </Link>
       </div>
 
-      <input
-        type="date"
-        value={date}
-        onChange={(e) => setDate(e.target.value)}
-        className="mb-4 border rounded-lg p-2 bg-white"
-      />
+      {/* Filter Tabs */}
+      <div className="flex gap-2">
+        {(['today', 'upcoming', 'all'] as const).map((f) => (
+          <button key={f} onClick={() => setFilter(f)}
+            className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
+              filter === f ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}>
+            {f === 'today' ? 'اليوم' : f === 'upcoming' ? 'القادمة' : 'الكل'}
+          </button>
+        ))}
+      </div>
 
       {loading ? (
-        <p className="text-gray-400 text-center py-8">جاري التحميل...</p>
+        <p className="text-center text-gray-400 py-12">جاري التحميل...</p>
+      ) : appointments.length === 0 ? (
+        <div className="text-center py-12 bg-white rounded-xl shadow">
+          <p className="text-gray-400 mb-3">لا توجد مواعيد</p>
+          <Link href="/appointments/new" className="text-green-600 hover:underline text-sm">+ أضف موعداً</Link>
+        </div>
       ) : (
         <div className="bg-white rounded-xl shadow overflow-hidden">
-          <table className="w-full text-right">
-            <thead className="bg-gray-50 text-gray-600 text-sm">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 border-b">
               <tr>
-                <th className="p-3">الوقت</th>
-                <th className="p-3">المريض</th>
-                <th className="p-3">الدكتور</th>
-                <th className="p-3">الحالة</th>
+                <th className="text-right p-3 font-medium text-gray-600">المريض</th>
+                <th className="text-right p-3 font-medium text-gray-600">الدكتور</th>
+                <th className="text-right p-3 font-medium text-gray-600">التاريخ والوقت</th>
+                <th className="text-right p-3 font-medium text-gray-600">الحالة</th>
+                <th className="p-3"></th>
               </tr>
             </thead>
-            <tbody>
-              {appointments.length === 0 ? (
-                <tr><td colSpan={4} className="text-center p-6 text-gray-400">لا توجد مواعيد لهذا اليوم</td></tr>
-              ) : (
-                appointments.map((a) => (
-                  <tr key={a.id} className="border-t hover:bg-gray-50">
-                    <td className="p-3 font-medium">{a.start_time?.slice(0, 5)}</td>
-                    <td className="p-3">{a.patients?.full_name || '—'}</td>
-                    <td className="p-3 text-gray-600">د. {a.users?.full_name || '—'}</td>
-                    <td className="p-3">
-                      <span className={`text-xs px-2 py-1 rounded-full ${statusColor[a.status] || 'bg-gray-100 text-gray-600'}`}>
-                        {statusLabel[a.status] || a.status}
-                      </span>
-                    </td>
-                  </tr>
-                ))
-              )}
+            <tbody className="divide-y">
+              {appointments.map((a) => (
+                <tr key={a.id} className="hover:bg-gray-50">
+                  <td className="p-3">
+                    <Link href={`/patients/${a.patients?.id}`} className="font-medium text-green-700 hover:underline">
+                      {a.patients?.full_name}
+                    </Link>
+                    {a.patients?.phone && <p className="text-xs text-gray-400">{a.patients.phone}</p>}
+                  </td>
+                  <td className="p-3 text-gray-600">
+                    {a.users ? `د. ${a.users.full_name}` : '—'}
+                    {a.users?.specialty && <p className="text-xs text-gray-400">{a.users.specialty}</p>}
+                  </td>
+                  <td className="p-3 text-gray-600">
+                    <p>{new Date(a.scheduled_at).toLocaleDateString('ar-EG')}</p>
+                    <p className="text-xs text-gray-400">{new Date(a.scheduled_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}</p>
+                  </td>
+                  <td className="p-3">
+                    <span className={`text-xs px-2 py-1 rounded-full ${
+                      STATUS_LABELS[a.status]?.color || 'bg-gray-100 text-gray-600'
+                    }`}>{STATUS_LABELS[a.status]?.label || a.status}</span>
+                  </td>
+                  <td className="p-3">
+                    <select
+                      value={a.status}
+                      onChange={(e) => updateStatus(a.id, e.target.value)}
+                      className="text-xs border rounded p-1 bg-white focus:outline-none">
+                      <option value="scheduled">مجدول</option>
+                      <option value="completed">مكتمل</option>
+                      <option value="cancelled">ملغي</option>
+                      <option value="no_show">لم يحضر</option>
+                    </select>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
