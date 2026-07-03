@@ -12,23 +12,28 @@ export default function NewAppointmentPage() {
   const searchParams = useSearchParams();
   const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [patients, setPatients] = useState<Patient[]>([]);
+  const [clinicId, setClinicId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [form, setForm] = useState({
-    patient_id: searchParams.get('patient') || '',
+    patient_id: searchParams.get('patient_id') || '',
     doctor_id: '',
-    appointment_date: new Date().toISOString().split('T')[0],
-    start_time: '09:00',
+    scheduled_at: '',
+    duration_minutes: '30',
     notes: '',
   });
-
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
 
   useEffect(() => {
     async function load() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data: u } = await supabase.from('users').select('clinic_id').eq('auth_id', user.id).single();
+        if (u?.clinic_id) setClinicId(u.clinic_id);
+      }
       const [{ data: d }, { data: p }] = await Promise.all([
-        supabase.from('users').select('id,full_name,specialty').eq('role', 'doctor'),
-        supabase.from('patients').select('id,full_name').order('full_name').limit(100),
+        supabase.from('users').select('id, full_name, specialty').eq('role', 'doctor'),
+        supabase.from('patients').select('id, full_name').order('full_name'),
       ]);
       setDoctors(d || []);
       setPatients(p || []);
@@ -38,16 +43,20 @@ export default function NewAppointmentPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.patient_id || !form.doctor_id) {
-      setError('المريض والدكتور مطلوبان');
+    if (!form.patient_id || !form.scheduled_at) {
+      setError('المريض والوقت مطلوبان');
       return;
     }
+    if (!clinicId) { setError('تعذر تحديد العيادة'); return; }
     setLoading(true);
     setError('');
-    const { data: clinic } = await supabase.from('clinics').select('id').limit(1).single();
     const { error: err } = await supabase.from('appointments').insert([{
-      ...form,
-      clinic_id: clinic?.id,
+      patient_id: form.patient_id,
+      doctor_id: form.doctor_id || null,
+      clinic_id: clinicId,
+      scheduled_at: form.scheduled_at,
+      duration_minutes: parseInt(form.duration_minutes),
+      notes: form.notes,
       status: 'scheduled',
     }]);
     setLoading(false);
@@ -57,44 +66,45 @@ export default function NewAppointmentPage() {
 
   return (
     <div className="max-w-xl">
-      <Link href="/appointments" className="text-sm text-green-600 hover:underline mb-4 inline-block">← العودة</Link>
+      <Link href="/appointments" className="text-sm text-green-600 hover:underline mb-4 inline-block">← المواعيد</Link>
       <h1 className="text-2xl font-bold text-green-700 mb-6">موعد جديد</h1>
       <form onSubmit={handleSubmit} className="bg-white rounded-xl shadow p-6 space-y-4">
         {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
 
         <Field label="المريض *">
           <select className={input} value={form.patient_id} onChange={(e) => set('patient_id', e.target.value)}>
-            <option value="">اختر مريض...</option>
-            {patients.map((p) => <option key={p.id} value={p.id}>{p.full_name}</option>)}
+            <option value="">-- اختر المريض --</option>
+            {patients.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
           </select>
         </Field>
 
-        <Field label="الدكتور *">
+        <Field label="الدكتور">
           <select className={input} value={form.doctor_id} onChange={(e) => set('doctor_id', e.target.value)}>
-            <option value="">اختر دكتور...</option>
-            {doctors.map((d) => <option key={d.id} value={d.id}>د. {d.full_name} — {d.specialty}</option>)}
+            <option value="">-- اختر الدكتور --</option>
+            {doctors.map(d => <option key={d.id} value={d.id}>{d.full_name}{d.specialty ? ` (${d.specialty})` : ''}</option>)}
           </select>
         </Field>
 
-        <div className="grid grid-cols-2 gap-4">
-          <Field label="التاريخ">
-            <input type="date" className={input} value={form.appointment_date} onChange={(e) => set('appointment_date', e.target.value)} />
-          </Field>
-          <Field label="الوقت">
-            <input type="time" className={input} value={form.start_time} onChange={(e) => set('start_time', e.target.value)} />
-          </Field>
-        </div>
+        <Field label="التاريخ والوقت *">
+          <input type="datetime-local" className={input} value={form.scheduled_at} onChange={(e) => set('scheduled_at', e.target.value)} />
+        </Field>
+
+        <Field label="مدة الموعد (دقيقة)">
+          <select className={input} value={form.duration_minutes} onChange={(e) => set('duration_minutes', e.target.value)}>
+            <option value="15">15 دقيقة</option>
+            <option value="30">30 دقيقة</option>
+            <option value="45">45 دقيقة</option>
+            <option value="60">ساعة</option>
+          </select>
+        </Field>
 
         <Field label="ملاحظات">
-          <textarea className={input + ' h-20 resize-none'} value={form.notes} onChange={(e) => set('notes', e.target.value)} placeholder="أي تفاصيل إضافية..." />
+          <textarea className={input} rows={3} value={form.notes} onChange={(e) => set('notes', e.target.value)} placeholder="أي تفاصيل إضافية..." />
         </Field>
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full bg-green-600 text-white py-3 rounded-lg font-medium hover:bg-green-700 disabled:opacity-50"
-        >
-          {loading ? 'جاري الحجز...' : 'تأكيد الموعد'}
+        <button type="submit" disabled={loading || !clinicId}
+          className="w-full bg-green-600 text-white py-3 rounded-lg font-medium hover:bg-green-700 disabled:opacity-50">
+          {loading ? 'جاري الحفظ...' : 'حجز الموعد'}
         </button>
       </form>
     </div>
@@ -102,7 +112,6 @@ export default function NewAppointmentPage() {
 }
 
 const input = 'w-full border rounded-lg p-2.5 text-right bg-white focus:outline-none focus:ring-2 focus:ring-green-500';
-
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
